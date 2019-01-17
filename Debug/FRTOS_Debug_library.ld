@@ -1,11 +1,11 @@
 /*
  * GENERATED FILE - DO NOT EDIT
  * (c) Code Red Technologies Ltd, 2008-2013
- * (c) NXP Semiconductors 2013-2018
+ * (c) NXP Semiconductors 2013-2019
  * Generated linker script file for LPC1769
  * Created from library.ldt by FMCreateLinkLibraries
  * Using Freemarker v2.3.23
- * MCUXpresso IDE v10.1.1 [Build 606] [2018-01-02]  on Dec 9, 2018 12:37:29 PM
+ * MCUXpresso IDE v10.1.1 [Build 606] [2018-01-02]  on Jan 17, 2019 3:21:40 PM
  */
 
 GROUP (

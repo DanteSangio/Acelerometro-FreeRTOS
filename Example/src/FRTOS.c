@@ -29,6 +29,22 @@ uint32_t promX = 0;
 uint32_t promY = 0;
 uint32_t promZ = 0;
 
+uint32_t promXant = 0;
+uint32_t promYant = 0;
+uint32_t promZant = 0;
+
+uint32_t deltaX = 0;
+uint32_t deltaY = 0;
+uint32_t deltaZ = 0;
+
+uint32_t cuadX = 0;
+uint32_t cuadY = 0;
+uint32_t cuadZ = 0;
+
+uint32_t cuadXant = 0;
+uint32_t cuadYant = 0;
+uint32_t cuadZant = 0;
+
 I2C_XFER_T xfer;
 
 #include <cr_section_macros.h>
@@ -45,6 +61,18 @@ I2C_XFER_T xfer;
 #define STATIC_0x40_REFERENCE_REGISTER 0x6B
 #define ACCEL_XOUT_H 0x3B
 #define ACCEL_XOUT_L 0x3C
+
+#define PUNTO_A		0
+#define PUNTO_B		16384
+#define PUNTO_C		32768
+#define PUNTO_D		49152
+#define PUNTO_E		65536
+
+
+#define CUAD_1		1
+#define CUAD_2		2
+#define CUAD_3		3
+#define CUAD_4		4
 
 // TODO: insert other definitions and declarations here
 #define PORT(x) 	((uint8_t) x)
@@ -146,6 +174,93 @@ void uC_StartUp (void)
 	Chip_I2C_SetMasterEventHandler(I2C1, Chip_I2C_EventHandlerPolling);
 }
 
+void calcularDeltas(void)
+{
+	/*EJE_X*/
+	if ( cuadX  == CUAD_1 && cuadXant == CUAD_4 )
+	{
+		deltaX = (PUNTO_E - promXant) + promX;
+	}
+	else if ( cuadX  == CUAD_4 && cuadXant == CUAD_1 )
+	{
+		deltaX = (PUNTO_E - promX) + promXant;
+	}
+	else
+	{
+		if ( promX > promXant )
+			deltaX = promX - promXant;
+		else
+			deltaX = promXant - promX;
+	}
+
+	/*EJE_Y*/
+	if ( cuadY  == CUAD_1 && cuadYant == CUAD_4 )
+	{
+		deltaY = (PUNTO_E - promYant) + promY;
+	}
+	else if ( cuadY  == CUAD_4 && cuadYant == CUAD_1 )
+	{
+		deltaY = (PUNTO_E - promY) + promYant;
+	}
+	else
+	{
+		if ( promY > promYant )
+			deltaY = promY - promYant;
+		else
+			deltaY = promYant - promY;
+	}
+
+	/*EJE_Z*/
+	if ( cuadZ  == CUAD_1 && cuadZant == CUAD_4 )
+	{
+		deltaZ = (PUNTO_E - promZant) + promZ;
+	}
+	else if ( cuadZ  == CUAD_4 && cuadZant == CUAD_1 )
+	{
+		deltaZ = (PUNTO_E - promZ) + promZant;
+	}
+	else
+	{
+		if ( promZ > promZant )
+			deltaZ = promZ - promZant;
+		else
+			deltaZ = promZant - promZ;
+	}
+}
+
+void calcularCuadrantes(void)
+{
+	/*EJE_X*/
+	if ( (promX >= PUNTO_A) && (promX < PUNTO_B) )
+		cuadX = CUAD_1;
+	else if ( (promX >= PUNTO_B) && (promX < PUNTO_C) )
+		cuadX = CUAD_2;
+	else if ( (promX >= PUNTO_C) && (promX < PUNTO_D) )
+		cuadX = CUAD_3;
+	else if ( (promX >= PUNTO_D) && (promX < PUNTO_E) )
+		cuadX = CUAD_4;
+
+	/*EJE_Y*/
+	if ( (promY >= PUNTO_A) && (promY < PUNTO_B) )
+		cuadY = CUAD_1;
+	else if ( (promY >= PUNTO_B) && (promY < PUNTO_C) )
+		cuadY = CUAD_2;
+	else if ( (promY >= PUNTO_C) && (promY < PUNTO_D) )
+		cuadY = CUAD_3;
+	else if ( (promY >= PUNTO_D) && (promY < PUNTO_E) )
+		cuadY = CUAD_4;
+
+	/*EJE_Z*/
+	if ( (promZ >= PUNTO_A) && (promZ < PUNTO_B) )
+		cuadZ = CUAD_1;
+	else if ( (promZ >= PUNTO_B) && (promZ < PUNTO_C) )
+		cuadZ = CUAD_2;
+	else if ( (promZ >= PUNTO_C) && (promZ < PUNTO_D) )
+		cuadZ = CUAD_3;
+	else if ( (promZ >= PUNTO_D) && (promZ < PUNTO_E) )
+		cuadZ = CUAD_4;
+}
+
 /* LED1 toggle thread */
 static void vTask1(void *pvParameters)
 {
@@ -167,6 +282,9 @@ static void xTaskMuestras(void *pvParameters)
 	{
 		xSemaphoreTake(Semaforo_Muestras_Acelerometro, portMAX_DELAY );
 
+		promXant = promX; promYant = promY; promZant = promZ;
+		cuadXant = cuadX; cuadYant = cuadY; cuadZant = cuadZ;
+
 		promX = promY = promZ = 0;
 
 		for ( k = 0 ; k < 100 ; k ++ )
@@ -175,12 +293,20 @@ static void xTaskMuestras(void *pvParameters)
 
 			Fill_Samples(&samples, &rbuf);
 
-			promX += samples[4];
-			promY += samples[5];
-			promZ += samples[6];
+			promX += samples[0];
+			promY += samples[1];
+			promZ += samples[2];
 
-			vTaskDelay( 1 / portTICK_PERIOD_MS );
+			//vTaskDelay( 1 / portTICK_PERIOD_MS );
 		}
+
+		vTaskDelay( 100 / portTICK_PERIOD_MS );
+
+		promX /= 100; promY /= 100; promZ /= 100;
+
+		calcularCuadrantes();
+
+		calcularDeltas();
 
 		xSemaphoreGive(Semaforo_Analisis_Acelerometro );
 	}
@@ -192,10 +318,13 @@ static void xTaskAcelerometro(void *pvParameters)
 	{
 		xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
 
-		promX /= 100; promY /= 100; promZ /= 100;
+		if ( ( deltaX > PUNTO_C ) || ( deltaY > PUNTO_C ) || ( deltaZ > PUNTO_C ) )
+		{
+			DEBUGOUT("Los deltas  son: %d          %d          %d \n", deltaX, deltaY, deltaZ);
+			DEBUGOUT("\n");
+		}
 
-	//	DEBUGOUT("Los valores son: %d          %d          %d \n", promX, promY, promZ);
-
+/*
 		if ( promX < 5000 )
 			DEBUGOUT("Aviso en eje X con valor : %d \n", promX );
 
@@ -204,7 +333,7 @@ static void xTaskAcelerometro(void *pvParameters)
 
 		if ( promZ < 5000 )
 			DEBUGOUT("Aviso en eje Z con valor : %d \n", promZ );
-
+*/
 		xSemaphoreGive(Semaforo_Muestras_Acelerometro);
 	}
 }
