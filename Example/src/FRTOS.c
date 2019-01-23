@@ -23,19 +23,19 @@ int32_t i, k;
 uint8_t wbuf[2] = {0,0};
 uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
-uint16_t samples[7] = {0,0,0,0,0,0,0}; //cada posicion es de 16 bits, necesario para guardar
+signed short int samples[7] = {0,0,0,0,0,0,0}; //cada posicion es de 16 bits, necesario para guardar
 									   //la parte low y high de las muestras de accel
-uint32_t promX = 0;
-uint32_t promY = 0;
-uint32_t promZ = 0;
+signed int promX = 0;
+signed int promY = 0;
+signed int promZ = 0;
 
-uint32_t promXant = 0;
-uint32_t promYant = 0;
-uint32_t promZant = 0;
+signed int promXant = 0;
+signed int promYant = 0;
+signed int promZant = 0;
 
-uint32_t deltaX = 0;
-uint32_t deltaY = 0;
-uint32_t deltaZ = 0;
+signed int deltaX = 0;
+signed int deltaY = 0;
+signed int deltaZ = 0;
 
 uint32_t cuadX = 0;
 uint32_t cuadY = 0;
@@ -46,6 +46,8 @@ uint32_t cuadYant = 0;
 uint32_t cuadZant = 0;
 
 I2C_XFER_T xfer;
+
+signed short int  valx;
 
 #include <cr_section_macros.h>
 
@@ -80,6 +82,8 @@ I2C_XFER_T xfer;
 
 #define OUTPUT		((uint8_t) 1)
 #define INPUT		((uint8_t) 0)
+
+#define	AVISO		5000
 
 /* Llena el vector de muestras samples con la data de los registros de ACCEL, GYRO y TEMP del MPU
  * Al estar la informacion en 16 bits y ser levantada por registros de 8, en rbuf esta la parte low
@@ -125,6 +129,14 @@ void MPU6050_wakeup(I2C_XFER_T * xfer)
 		xfer->rxSz = 0;*/
 
 		I2C_XFER_config(xfer, xfer->rxBuff, 0, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 3);
+
+		uint8_t wbuf2[2] = {0x1C, 0x18};//Sensibilidad de 16 G para el acelerometro
+		/*xfer->slaveAddr = MPU6050_DEVICE_ADDRESS;
+		xfer->txBuff = wbuf;
+		xfer->txSz = 3;
+		xfer->rxSz = 0;*/
+
+		I2C_XFER_config(xfer, xfer->rxBuff, 0, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf2, 2);
 }
 
 /*
@@ -278,12 +290,13 @@ static void vTask1(void *pvParameters)
 
 static void xTaskMuestras(void *pvParameters)
 {
+
 	while(1)
 	{
 		xSemaphoreTake(Semaforo_Muestras_Acelerometro, portMAX_DELAY );
 
 		promXant = promX; promYant = promY; promZant = promZ;
-		cuadXant = cuadX; cuadYant = cuadY; cuadZant = cuadZ;
+		//cuadXant = cuadX; cuadYant = cuadY; cuadZant = cuadZ;
 
 		promX = promY = promZ = 0;
 
@@ -292,6 +305,8 @@ static void xTaskMuestras(void *pvParameters)
 			I2C_XFER_config(&xfer, rbuf, 14, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 1);
 
 			Fill_Samples(&samples, &rbuf);
+
+			valx = samples[0];
 
 			promX += samples[0];
 			promY += samples[1];
@@ -304,10 +319,52 @@ static void xTaskMuestras(void *pvParameters)
 
 		promX /= 100; promY /= 100; promZ /= 100;
 
-		calcularCuadrantes();
 
-		calcularDeltas();
+		//calcularCuadrantes();
 
+		//calcularDeltas();
+
+		if(promX > promXant)
+		{
+			deltaX = promX - promXant;
+		}
+		else
+		{
+			deltaX = promXant - promX;
+		}
+
+		if(promY > promYant)
+		{
+			deltaY = promY - promYant;
+		}
+		else
+		{
+			deltaY = promYant - promY;
+		}
+
+		if(promZ > promZant)
+		{
+			deltaZ = promZ - promZant;
+		}
+		else
+		{
+			deltaZ = promZant - promZ;
+		}
+
+		if(deltaX < 0)
+		{
+			deltaX = deltaX * (-1);
+		}
+
+		if(deltaY < 0)
+		{
+			deltaY = deltaY * (-1);
+		}
+
+		if(deltaZ < 0)
+		{
+			deltaZ = deltaZ * (-1);
+		}
 		xSemaphoreGive(Semaforo_Analisis_Acelerometro );
 	}
 }
@@ -318,8 +375,10 @@ static void xTaskAcelerometro(void *pvParameters)
 	{
 		xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
 
-		if ( ( deltaX > PUNTO_C ) || ( deltaY > PUNTO_C ) || ( deltaZ > PUNTO_C ) )
+		if ( ( deltaX > AVISO ) || ( deltaY > AVISO ) || ( deltaZ > AVISO ) )
 		{
+			//DEBUGOUT("Los valores  son: %d          %d          %d \n", promX, promY, promZ);
+			//DEBUGOUT("\n");
 			DEBUGOUT("Los deltas  son: %d          %d          %d \n", deltaX, deltaY, deltaZ);
 			DEBUGOUT("\n");
 		}
