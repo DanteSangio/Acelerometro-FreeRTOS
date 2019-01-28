@@ -11,18 +11,16 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#include "Acelerometro.h"
 
 #define BUZZER PORT(2),PIN(6)
 
 SemaphoreHandle_t Semaforo_Muestras_Acelerometro;
 SemaphoreHandle_t Semaforo_Analisis_Acelerometro;
 
-QueueHandle_t Cola_DeltaX;
-QueueHandle_t Cola_DeltaY;
-QueueHandle_t Cola_DeltaZ;
-
-
-I2C_XFER_T xfer;
+QueueHandle_t Cola_PromX;
+QueueHandle_t Cola_PromY;
+QueueHandle_t Cola_PromZ;
 
 
 #include <cr_section_macros.h>
@@ -30,113 +28,12 @@ I2C_XFER_T xfer;
 // TODO: insert other include files here
 #define DEBUGOUT(...) printf(__VA_ARGS__)
 
-#define MPU6050_DEVICE_ADDRESS   0x68
-#define MPU6050_RA_ACCEL_XOUT_H  0x3B
-#define MPU6050_RA_PWR_MGMT_1    0x6B
-#define MPU6050_RA_PWR_MGMT_2    0x6C
-#define MPU6050_PWR1_SLEEP_BIT   6
-#define MPU6050_I2C_SLAVE_ADDRESS 0x68
-#define STATIC_0x40_REFERENCE_REGISTER 0x6B
-#define ACCEL_XOUT_H 0x3B
-#define ACCEL_XOUT_L 0x3C
-
-
 // TODO: insert other definitions and declarations here
 #define PORT(x) 	((uint8_t) x)
 #define PIN(x)		((uint8_t) x)
 
 #define OUTPUT		((uint8_t) 1)
 #define INPUT		((uint8_t) 0)
-
-#define	AVISO		10000
-#define	XDefecto	4310
-#define	YDefecto	-250
-#define	ZDefecto	-510
-
-/* Llena el vector de muestras samples con la data de los registros de ACCEL, GYRO y TEMP del MPU
- * Al estar la informacion en 16 bits y ser levantada por registros de 8, en rbuf esta la parte low
- * 	y high de cada componente, por lo que se debe recomponer desplazando la parte high y concatenando la low]
- * 	para obtener el valor que se midio. Proceso que se realiza en esta funcion para pasar a samples.
- *
- * 	 rbuf : Tiene la data leida por el MPU con la data dividida en high y low
- * 	 samples : Tendra la data agrupada que representa al valor medido por los sensores en cada eje
- */
-void Fill_Samples(signed short int * samples, uint8_t * rbuf)
-{
-	//De momento leer rbuf es lo mismo que leer xfer.rxBuff porque apuntan a la misma direccion
-	//Desplazamos la parte alta a los 8 ultimos bits y le hacemos un OR para tener en los 8 primeros la parte baja
-
-
-	samples[0]=(rbuf[0] << 8) | rbuf[1];
-	samples[1]=(rbuf[2] << 8) | rbuf[3];
-	samples[2]=(rbuf[4] << 8) | rbuf[5];
-	samples[3]=(rbuf[6] << 8) | rbuf[7];
-	samples[4]=(rbuf[8] << 8) | rbuf[9];
-	samples[5]=(rbuf[10] << 8) | rbuf[11];
-	samples[6]=(rbuf[12] << 8) | rbuf[13];
-}
-
-void I2C_XFER_config (I2C_XFER_T * xfer,uint8_t *rbuf, int rxSz, uint8_t slaveAddr, I2C_STATUS_T status, uint8_t * wbuf, int txSz)
-{
-	xfer->rxBuff = rbuf; //Buffer de lectura
-	xfer->rxSz = rxSz;	//cantidad de bytes que se desean leer, arbitrariamente seteamos 10
-	xfer->slaveAddr = slaveAddr; //Adress estatica del dispositivo i2c a leer (MPU6050)
-	xfer->status = status;
-	xfer->txBuff = wbuf; //Buffer de escritura
-	xfer->txSz = txSz; //cantidad de bytes que se desean escribir, solo escribimos el registro desde
-					//el que comenzamos a leer
-	Chip_I2C_MasterTransfer(I2C1, xfer);
-}
-
-
-/*
- * Se encarga de inicializar los registros de PWR_MGMT necesarios para habilitar los
- *  sensores (acelerometro y giroscopo) en cada eje, para sus lecturas.
- *  La configuracion en la que quedan seteados es la por defecto:
- *  accelerometer (±2g) , gyroscope (±250°/sec).
- *
- *  * xfer : Puntero a la estructura del tipo I2C_XFER_T necesaria para la utilizacion de Chip_I2C_MasterTransfer.
- *  		 Chip_I2C_MasterTransfer : Funcion que resuelve la interaccion i2c en funcion de lo especificado en la estructura I2C_XFER_T
- */
-void MPU6050_wakeup(I2C_XFER_T * xfer)
-{
-		//Setea PWR_MGMT_1 y 2 en 0, el byte de cada uno
-
-
-		uint8_t wbuf[3] = {MPU6050_RA_PWR_MGMT_1, 0, 0};
-		/*xfer->slaveAddr = MPU6050_DEVICE_ADDRESS;
-		xfer->txBuff = wbuf;
-		xfer->txSz = 3;
-		xfer->rxSz = 0;*/
-
-		I2C_XFER_config(xfer, xfer->rxBuff, 0, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 3);
-
-		uint8_t wbuf2[2] = {0x1C, 0x10};//Sensibilidad de +-8G para el acelerometro
-		/*xfer->slaveAddr = MPU6050_DEVICE_ADDRESS;
-		xfer->txBuff = wbuf;
-		xfer->txSz = 3;
-		xfer->rxSz = 0;*/
-
-		I2C_XFER_config(xfer, xfer->rxBuff, 0, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf2, 2);
-}
-
-/*
- * Configura la estructura XFER para realizar la comunicacion i2c.
- * * xfer	  : Puntero a la estructura del tipo I2C_XFER_T necesaria para utilizar la funcion Chip_I2C_MasterTransfer.
- * 				Chip_I2C_MasterTransfer : Funcion que resuelve la interaccion i2c en funcion de lo especificado en la estructura I2C_XFER_T
- *	 rbuf 	  : Puntero al buffer de lectura donde se volcaran los bytes leidos
- *	 rxSz 	  : Cantidad de bytes que se leeran y volcaran en rbuf
- *	 slaveAddr: Direccion estatica del slave con el que se desea comunicar
- *	 status   : Estado de la comunicacion, (estado inicial 0)
- *	 wbuf	  : Buffer de escritura donde se colocara tanto el registro que se desea escribir como el dato que desea ser escrito
- *	 			Ej de uso: wbuf[] = {reg_inicial, dato} solo escribe el byte dato en reg_inicial
- *	 					   wbuf[] = {reg_inicial, dato1, dato2} escribe el byte dato1 en reg_incial y dato2 en reg_inicial+1 (el registro siguiente)
- *	 txSz	  : La cantidad de bytes que se desean enviar, osea empezando a leer wbuf desde 0 inclusive, cuantos bytes manda de ese buffer
- *	 			Ej : wbuf[] = {reg_inicial, dato1, dato2}, entonces txSz deberia ser = 3
- *	 				 wbuf[] = {reg_inicial}, (caso tipico de solo lectura de ese registro), entonces txSz deberia ser = 1
- */
-
-
 
 void uC_StartUp (void)
 {
@@ -171,21 +68,22 @@ static void xTaskMuestras(void *pvParameters)
 	static signed int promY = 0;
 	static signed int promZ = 0;
 
-	static signed int promXant = XDefecto;
-	static signed int promYant = YDefecto;
-	static signed int promZant = ZDefecto;
-
-	static	signed int deltaX = 0;
-	static	signed int deltaY = 0;
-	static	signed int deltaZ = 0;
-
 	static signed short int  valxPrevio=0,valx;
 
 	static uint8_t k;
 
 	uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-	static uint8_t wbuf[2] = {MPU6050_RA_ACCEL_XOUT_H,0};
-	//Configuracion de la 1era direccion desde la que se leeran los valores de los registros de los sensores
+	static uint8_t wbuf[2] = {0,0};
+
+	static	I2C_XFER_T xfer;
+
+	MPU6050_wakeup(&xfer);
+
+	//Lectura de PWR_MGMMT_1 2 (para verificar si se lo saco del sleep y de standby a los ejes)
+	wbuf[0] = MPU6050_RA_PWR_MGMT_1;
+	I2C_XFER_config(&xfer, rbuf, 2, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 1);
+
+	wbuf[0] = MPU6050_RA_ACCEL_XOUT_H;	//Configuracion de la 1era direccion desde la que se leeran los valores de los registros de los sensores
 
 	while(1)
 	{
@@ -215,7 +113,32 @@ static void xTaskMuestras(void *pvParameters)
 
 		promX /= 100; promY /= 100; promZ /= 100;
 
+		xQueueOverwrite(Cola_PromX,&promX);
+		xQueueOverwrite(Cola_PromY,&promY);
+		xQueueOverwrite(Cola_PromZ,&promZ);
 
+		promX = promY = promZ = 0;
+
+		xSemaphoreGive(Semaforo_Analisis_Acelerometro );
+		vTaskDelay(5/portTICK_RATE_MS);//delay de 5ms
+	}
+}
+
+static void xTaskAcelerometro(void *pvParameters)
+{
+	signed int 	deltaX,deltaY,deltaZ;
+	signed int 	promX,promY,promZ;
+	uint16_t	difX,difY,difZ;
+	static signed int promXant = XDefecto, promYant = YDefecto, promZant = ZDefecto;
+
+	while(1)
+	{
+		xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
+		xQueuePeek(Cola_PromX,&promX,portMAX_DELAY);
+		xQueuePeek(Cola_PromY,&promY,portMAX_DELAY);
+		xQueuePeek(Cola_PromZ,&promZ,portMAX_DELAY);
+
+		//Calculo para ver si hay choque
 		if(promX > promXant)
 		{
 			deltaX = promX - promXant;
@@ -243,51 +166,48 @@ static void xTaskMuestras(void *pvParameters)
 			deltaZ = promZant - promZ;
 		}
 
-		if(deltaX < 0)
+		//Calculo para ver si hay vuelco
+		if(promX > XDefecto)
 		{
-			deltaX = deltaX * (-1);
+			difX = promX - XDefecto;
+		}
+		else
+		{
+			difX = XDefecto - promX;
+		}
+		if(promY > YDefecto)
+		{
+			difY = promY - YDefecto;
+		}
+		else
+		{
+			difY = YDefecto - promY;
+		}
+		if(promZ > ZDefecto)
+		{
+			difZ = promZ - ZDefecto;
+		}
+		else
+		{
+			difZ = ZDefecto - promZ;
 		}
 
-		if(deltaY < 0)
+		if ( ( deltaX > CHOQUE ) || ( deltaY > CHOQUE ) || ( deltaZ > CHOQUE ) ) //para un choque
 		{
-			deltaY = deltaY * (-1);
+			Chip_GPIO_SetPinOutHigh(LPC_GPIO, BUZZER);
+			vTaskDelay(1000/portTICK_RATE_MS);//delay de 250ms
+			Chip_GPIO_SetPinOutLow(LPC_GPIO, BUZZER);
+			vTaskDelay(100/portTICK_RATE_MS);//delay de 250ms
 		}
-
-		if(deltaZ < 0)
+		if ( ( difX > VUELCO ) || ( difY > VUELCO ) || ( difZ > VUELCO ) ) //para un choque
 		{
-			deltaZ = deltaZ * (-1);
+			Chip_GPIO_SetPinOutHigh(LPC_GPIO, BUZZER);
+			vTaskDelay(250/portTICK_RATE_MS);//delay de 250ms
+			Chip_GPIO_SetPinOutLow(LPC_GPIO, BUZZER);
+
 		}
 
 		promXant = promX; promYant = promY; promZant = promZ;
-
-		promX = promY = promZ = 0;
-
-		xQueueOverwrite(Cola_DeltaX,&deltaX);
-		xQueueOverwrite(Cola_DeltaY,&deltaY);
-		xQueueOverwrite(Cola_DeltaZ,&deltaZ);
-		xSemaphoreGive(Semaforo_Analisis_Acelerometro );
-	}
-}
-
-static void xTaskAcelerometro(void *pvParameters)
-{
-	static	signed int deltaX = 0;
-	static	signed int deltaY = 0;
-	static	signed int deltaZ = 0;
-
-	while(1)
-	{
-		xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
-		xQueuePeek(Cola_DeltaX,&deltaX,portMAX_DELAY);
-		xQueuePeek(Cola_DeltaY,&deltaY,portMAX_DELAY);
-		xQueuePeek(Cola_DeltaZ,&deltaZ,portMAX_DELAY);
-
-		if ( ( deltaX > AVISO ) || ( deltaY > AVISO ) || ( deltaZ > AVISO ) ) //para un choque
-		{
-			DEBUGOUT("Los deltas  son: %d          %d          %d \n", deltaX, deltaY, deltaZ);
-			DEBUGOUT("\n");
-		}
-
 
 		xSemaphoreGive(Semaforo_Muestras_Acelerometro);
 	}
@@ -296,19 +216,8 @@ static void xTaskAcelerometro(void *pvParameters)
 
 int main(void)
 {
-	uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-	static uint8_t wbuf[2] = {0,0};
-
 	uC_StartUp ();
 	SystemCoreClockUpdate();
-
-	MPU6050_wakeup(&xfer);
-
-	//Lectura de PWR_MGMMT_1 2 (para verificar si se lo saco del sleep y de standby a los ejes)
-	wbuf[0] = MPU6050_RA_PWR_MGMT_1;
-	I2C_XFER_config(&xfer, rbuf, 2, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 1);
-
-
 
 	DEBUGOUT("Prueba acelerometro..\n");
 
@@ -318,9 +227,10 @@ int main(void)
 
 	xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
 
-	Cola_DeltaX = xQueueCreate(1, sizeof(signed int));
-	Cola_DeltaY = xQueueCreate(1, sizeof(signed int));
-	Cola_DeltaZ = xQueueCreate(1, sizeof(signed int));
+	Cola_PromX = xQueueCreate(1, sizeof(signed int));
+	Cola_PromY = xQueueCreate(1, sizeof(signed int));
+	Cola_PromZ = xQueueCreate(1, sizeof(signed int));
+
 
 	xTaskCreate(xTaskAcelerometro, (char *) "xTaskAcelerometro",
 				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 2UL),

@@ -10,6 +10,7 @@ RM := rm -rf
 -include sources.mk
 -include freeRTOS/src/subdir.mk
 -include Example/src/subdir.mk
+-include Acelerometro/src/subdir.mk
 -include subdir.mk
 -include objects.mk
 
