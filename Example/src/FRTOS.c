@@ -12,42 +12,18 @@
 #include "task.h"
 #include "semphr.h"
 
-SemaphoreHandle_t Semaforo_1;
-SemaphoreHandle_t Semaforo_2;
+#define BUZZER PORT(2),PIN(6)
 
 SemaphoreHandle_t Semaforo_Muestras_Acelerometro;
 SemaphoreHandle_t Semaforo_Analisis_Acelerometro;
 
-int32_t i, k;
+QueueHandle_t Cola_DeltaX;
+QueueHandle_t Cola_DeltaY;
+QueueHandle_t Cola_DeltaZ;
 
-uint8_t wbuf[2] = {0,0};
-uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-
-signed short int samples[7] = {0,0,0,0,0,0,0}; //cada posicion es de 16 bits, necesario para guardar
-									   //la parte low y high de las muestras de accel
-signed int promX = 0;
-signed int promY = 0;
-signed int promZ = 0;
-
-signed int promXant = 0;
-signed int promYant = 0;
-signed int promZant = 0;
-
-signed int deltaX = 0;
-signed int deltaY = 0;
-signed int deltaZ = 0;
-
-uint32_t cuadX = 0;
-uint32_t cuadY = 0;
-uint32_t cuadZ = 0;
-
-uint32_t cuadXant = 0;
-uint32_t cuadYant = 0;
-uint32_t cuadZant = 0;
 
 I2C_XFER_T xfer;
 
-signed short int  valx;
 
 #include <cr_section_macros.h>
 
@@ -64,17 +40,6 @@ signed short int  valx;
 #define ACCEL_XOUT_H 0x3B
 #define ACCEL_XOUT_L 0x3C
 
-#define PUNTO_A		0
-#define PUNTO_B		16384
-#define PUNTO_C		32768
-#define PUNTO_D		49152
-#define PUNTO_E		65536
-
-
-#define CUAD_1		1
-#define CUAD_2		2
-#define CUAD_3		3
-#define CUAD_4		4
 
 // TODO: insert other definitions and declarations here
 #define PORT(x) 	((uint8_t) x)
@@ -83,7 +48,10 @@ signed short int  valx;
 #define OUTPUT		((uint8_t) 1)
 #define INPUT		((uint8_t) 0)
 
-#define	AVISO		5000
+#define	AVISO		10000
+#define	XDefecto	4310
+#define	YDefecto	-250
+#define	ZDefecto	-510
 
 /* Llena el vector de muestras samples con la data de los registros de ACCEL, GYRO y TEMP del MPU
  * Al estar la informacion en 16 bits y ser levantada por registros de 8, en rbuf esta la parte low
@@ -93,7 +61,7 @@ signed short int  valx;
  * 	 rbuf : Tiene la data leida por el MPU con la data dividida en high y low
  * 	 samples : Tendra la data agrupada que representa al valor medido por los sensores en cada eje
  */
-void Fill_Samples(uint16_t * samples, uint8_t * rbuf)
+void Fill_Samples(signed short int * samples, uint8_t * rbuf)
 {
 	//De momento leer rbuf es lo mismo que leer xfer.rxBuff porque apuntan a la misma direccion
 	//Desplazamos la parte alta a los 8 ultimos bits y le hacemos un OR para tener en los 8 primeros la parte baja
@@ -107,6 +75,19 @@ void Fill_Samples(uint16_t * samples, uint8_t * rbuf)
 	samples[5]=(rbuf[10] << 8) | rbuf[11];
 	samples[6]=(rbuf[12] << 8) | rbuf[13];
 }
+
+void I2C_XFER_config (I2C_XFER_T * xfer,uint8_t *rbuf, int rxSz, uint8_t slaveAddr, I2C_STATUS_T status, uint8_t * wbuf, int txSz)
+{
+	xfer->rxBuff = rbuf; //Buffer de lectura
+	xfer->rxSz = rxSz;	//cantidad de bytes que se desean leer, arbitrariamente seteamos 10
+	xfer->slaveAddr = slaveAddr; //Adress estatica del dispositivo i2c a leer (MPU6050)
+	xfer->status = status;
+	xfer->txBuff = wbuf; //Buffer de escritura
+	xfer->txSz = txSz; //cantidad de bytes que se desean escribir, solo escribimos el registro desde
+					//el que comenzamos a leer
+	Chip_I2C_MasterTransfer(I2C1, xfer);
+}
+
 
 /*
  * Se encarga de inicializar los registros de PWR_MGMT necesarios para habilitar los
@@ -130,7 +111,7 @@ void MPU6050_wakeup(I2C_XFER_T * xfer)
 
 		I2C_XFER_config(xfer, xfer->rxBuff, 0, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 3);
 
-		uint8_t wbuf2[2] = {0x1C, 0x18};//Sensibilidad de 16 G para el acelerometro
+		uint8_t wbuf2[2] = {0x1C, 0x10};//Sensibilidad de +-8G para el acelerometro
 		/*xfer->slaveAddr = MPU6050_DEVICE_ADDRESS;
 		xfer->txBuff = wbuf;
 		xfer->txSz = 3;
@@ -155,17 +136,7 @@ void MPU6050_wakeup(I2C_XFER_T * xfer)
  *	 				 wbuf[] = {reg_inicial}, (caso tipico de solo lectura de ese registro), entonces txSz deberia ser = 1
  */
 
-void I2C_XFER_config (I2C_XFER_T * xfer,uint8_t *rbuf, int rxSz, uint8_t slaveAddr, I2C_STATUS_T status, uint8_t * wbuf, int txSz)
-{
-	xfer->rxBuff = rbuf; //Buffer de lectura
-	xfer->rxSz = rxSz;	//cantidad de bytes que se desean leer, arbitrariamente seteamos 10
-	xfer->slaveAddr = slaveAddr; //Adress estatica del dispositivo i2c a leer (MPU6050)
-	xfer->status = status;
-	xfer->txBuff = wbuf; //Buffer de escritura
-	xfer->txSz = txSz; //cantidad de bytes que se desean escribir, solo escribimos el registro desde
-					//el que comenzamos a leer
-	Chip_I2C_MasterTransfer(I2C1, xfer);
-}
+
 
 void uC_StartUp (void)
 {
@@ -175,6 +146,10 @@ void uC_StartUp (void)
 	Chip_IOCON_PinMux(LPC_IOCON, 0, 20, IOCON_MODE_INACT, IOCON_FUNC2);
 	Chip_IOCON_EnableOD(LPC_IOCON, 0, 19);
 	Chip_IOCON_EnableOD(LPC_IOCON, 0, 20);
+
+	Chip_GPIO_SetDir (LPC_GPIO, BUZZER, OUTPUT);
+	Chip_IOCON_PinMux (LPC_IOCON, BUZZER, IOCON_MODE_INACT, IOCON_FUNC0);
+	Chip_GPIO_SetPinOutLow(LPC_GPIO, BUZZER);
 
     /* pines del stick */
 	Chip_IOCON_PinMux(LPC_IOCON, 0, 0, IOCON_MODE_INACT, IOCON_FUNC3);
@@ -186,143 +161,60 @@ void uC_StartUp (void)
 	Chip_I2C_SetMasterEventHandler(I2C1, Chip_I2C_EventHandlerPolling);
 }
 
-void calcularDeltas(void)
-{
-	/*EJE_X*/
-	if ( cuadX  == CUAD_1 && cuadXant == CUAD_4 )
-	{
-		deltaX = (PUNTO_E - promXant) + promX;
-	}
-	else if ( cuadX  == CUAD_4 && cuadXant == CUAD_1 )
-	{
-		deltaX = (PUNTO_E - promX) + promXant;
-	}
-	else
-	{
-		if ( promX > promXant )
-			deltaX = promX - promXant;
-		else
-			deltaX = promXant - promX;
-	}
-
-	/*EJE_Y*/
-	if ( cuadY  == CUAD_1 && cuadYant == CUAD_4 )
-	{
-		deltaY = (PUNTO_E - promYant) + promY;
-	}
-	else if ( cuadY  == CUAD_4 && cuadYant == CUAD_1 )
-	{
-		deltaY = (PUNTO_E - promY) + promYant;
-	}
-	else
-	{
-		if ( promY > promYant )
-			deltaY = promY - promYant;
-		else
-			deltaY = promYant - promY;
-	}
-
-	/*EJE_Z*/
-	if ( cuadZ  == CUAD_1 && cuadZant == CUAD_4 )
-	{
-		deltaZ = (PUNTO_E - promZant) + promZ;
-	}
-	else if ( cuadZ  == CUAD_4 && cuadZant == CUAD_1 )
-	{
-		deltaZ = (PUNTO_E - promZ) + promZant;
-	}
-	else
-	{
-		if ( promZ > promZant )
-			deltaZ = promZ - promZant;
-		else
-			deltaZ = promZant - promZ;
-	}
-}
-
-void calcularCuadrantes(void)
-{
-	/*EJE_X*/
-	if ( (promX >= PUNTO_A) && (promX < PUNTO_B) )
-		cuadX = CUAD_1;
-	else if ( (promX >= PUNTO_B) && (promX < PUNTO_C) )
-		cuadX = CUAD_2;
-	else if ( (promX >= PUNTO_C) && (promX < PUNTO_D) )
-		cuadX = CUAD_3;
-	else if ( (promX >= PUNTO_D) && (promX < PUNTO_E) )
-		cuadX = CUAD_4;
-
-	/*EJE_Y*/
-	if ( (promY >= PUNTO_A) && (promY < PUNTO_B) )
-		cuadY = CUAD_1;
-	else if ( (promY >= PUNTO_B) && (promY < PUNTO_C) )
-		cuadY = CUAD_2;
-	else if ( (promY >= PUNTO_C) && (promY < PUNTO_D) )
-		cuadY = CUAD_3;
-	else if ( (promY >= PUNTO_D) && (promY < PUNTO_E) )
-		cuadY = CUAD_4;
-
-	/*EJE_Z*/
-	if ( (promZ >= PUNTO_A) && (promZ < PUNTO_B) )
-		cuadZ = CUAD_1;
-	else if ( (promZ >= PUNTO_B) && (promZ < PUNTO_C) )
-		cuadZ = CUAD_2;
-	else if ( (promZ >= PUNTO_C) && (promZ < PUNTO_D) )
-		cuadZ = CUAD_3;
-	else if ( (promZ >= PUNTO_D) && (promZ < PUNTO_E) )
-		cuadZ = CUAD_4;
-}
-
-/* LED1 toggle thread */
-static void vTask1(void *pvParameters)
-{
-	while (1)
-	{
-		xSemaphoreTake(Semaforo_2 , portMAX_DELAY );
-
-		Chip_GPIO_SetPinOutHigh (LPC_GPIO , PORT(0) , PIN(22));
-
-		vTaskDelay( 500 / portTICK_PERIOD_MS );
-
-		xSemaphoreGive(Semaforo_1 );
-	}
-}
 
 static void xTaskMuestras(void *pvParameters)
 {
+
+	signed short int samples[7] = {0,0,0,0,0,0,0}; //cada posicion es de 16 bits, necesario para guardar
+										   //la parte low y high de las muestras de accel
+	static signed int promX = 0;
+	static signed int promY = 0;
+	static signed int promZ = 0;
+
+	static signed int promXant = XDefecto;
+	static signed int promYant = YDefecto;
+	static signed int promZant = ZDefecto;
+
+	static	signed int deltaX = 0;
+	static	signed int deltaY = 0;
+	static	signed int deltaZ = 0;
+
+	static signed short int  valxPrevio=0,valx;
+
+	static uint8_t k;
+
+	uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+	static uint8_t wbuf[2] = {MPU6050_RA_ACCEL_XOUT_H,0};
+	//Configuracion de la 1era direccion desde la que se leeran los valores de los registros de los sensores
 
 	while(1)
 	{
 		xSemaphoreTake(Semaforo_Muestras_Acelerometro, portMAX_DELAY );
 
-		promXant = promX; promYant = promY; promZant = promZ;
-		//cuadXant = cuadX; cuadYant = cuadY; cuadZant = cuadZ;
-
-		promX = promY = promZ = 0;
-
 		for ( k = 0 ; k < 100 ; k ++ )
 		{
 			I2C_XFER_config(&xfer, rbuf, 14, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 1);
 
-			Fill_Samples(&samples, &rbuf);
+			Fill_Samples(samples, rbuf);
 
 			valx = samples[0];
 
-			promX += samples[0];
-			promY += samples[1];
-			promZ += samples[2];
-
-			//vTaskDelay( 1 / portTICK_PERIOD_MS );
+			if(valx != valxPrevio)
+			{
+				promX += samples[0];
+				promY += samples[1];
+				promZ += samples[2];
+				valxPrevio = valx;
+			}
+			else
+			{
+				vTaskDelay( 5 / 100 / configTICK_RATE_HZ );// delay de 500 useg
+				k--;//evito que sume al contador
+			}
 		}
-
-		vTaskDelay( 100 / portTICK_PERIOD_MS );
 
 		promX /= 100; promY /= 100; promZ /= 100;
 
-
-		//calcularCuadrantes();
-
-		//calcularDeltas();
 
 		if(promX > promXant)
 		{
@@ -365,34 +257,38 @@ static void xTaskMuestras(void *pvParameters)
 		{
 			deltaZ = deltaZ * (-1);
 		}
+
+		promXant = promX; promYant = promY; promZant = promZ;
+
+		promX = promY = promZ = 0;
+
+		xQueueOverwrite(Cola_DeltaX,&deltaX);
+		xQueueOverwrite(Cola_DeltaY,&deltaY);
+		xQueueOverwrite(Cola_DeltaZ,&deltaZ);
 		xSemaphoreGive(Semaforo_Analisis_Acelerometro );
 	}
 }
 
 static void xTaskAcelerometro(void *pvParameters)
 {
+	static	signed int deltaX = 0;
+	static	signed int deltaY = 0;
+	static	signed int deltaZ = 0;
+
 	while(1)
 	{
 		xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
+		xQueuePeek(Cola_DeltaX,&deltaX,portMAX_DELAY);
+		xQueuePeek(Cola_DeltaY,&deltaY,portMAX_DELAY);
+		xQueuePeek(Cola_DeltaZ,&deltaZ,portMAX_DELAY);
 
-		if ( ( deltaX > AVISO ) || ( deltaY > AVISO ) || ( deltaZ > AVISO ) )
+		if ( ( deltaX > AVISO ) || ( deltaY > AVISO ) || ( deltaZ > AVISO ) ) //para un choque
 		{
-			//DEBUGOUT("Los valores  son: %d          %d          %d \n", promX, promY, promZ);
-			//DEBUGOUT("\n");
 			DEBUGOUT("Los deltas  son: %d          %d          %d \n", deltaX, deltaY, deltaZ);
 			DEBUGOUT("\n");
 		}
 
-/*
-		if ( promX < 5000 )
-			DEBUGOUT("Aviso en eje X con valor : %d \n", promX );
 
-		if ( promY < 5000 )
-			DEBUGOUT("Aviso en eje Y con valor : %d \n", promY );
-
-		if ( promZ < 5000 )
-			DEBUGOUT("Aviso en eje Z con valor : %d \n", promZ );
-*/
 		xSemaphoreGive(Semaforo_Muestras_Acelerometro);
 	}
 }
@@ -400,6 +296,9 @@ static void xTaskAcelerometro(void *pvParameters)
 
 int main(void)
 {
+	uint8_t rbuf[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+	static uint8_t wbuf[2] = {0,0};
+
 	uC_StartUp ();
 	SystemCoreClockUpdate();
 
@@ -409,23 +308,22 @@ int main(void)
 	wbuf[0] = MPU6050_RA_PWR_MGMT_1;
 	I2C_XFER_config(&xfer, rbuf, 2, MPU6050_I2C_SLAVE_ADDRESS, 0, wbuf, 1);
 
-	//Configuracion de la 1era direccion desde la que se leeran los valores de los registros de los sensores
-	wbuf[0]=MPU6050_RA_ACCEL_XOUT_H;
-	wbuf[1]=0;
+
 
 	DEBUGOUT("Prueba acelerometro..\n");
 
-	vSemaphoreCreateBinary(Semaforo_1);
-	vSemaphoreCreateBinary(Semaforo_2);
 
 	vSemaphoreCreateBinary(Semaforo_Muestras_Acelerometro);
 	vSemaphoreCreateBinary(Semaforo_Analisis_Acelerometro);
 
-	xSemaphoreTake(Semaforo_1 , portMAX_DELAY );
 	xSemaphoreTake(Semaforo_Analisis_Acelerometro , portMAX_DELAY );
 
+	Cola_DeltaX = xQueueCreate(1, sizeof(signed int));
+	Cola_DeltaY = xQueueCreate(1, sizeof(signed int));
+	Cola_DeltaZ = xQueueCreate(1, sizeof(signed int));
+
 	xTaskCreate(xTaskAcelerometro, (char *) "xTaskAcelerometro",
-				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 1UL),
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 2UL),
 				(xTaskHandle *) NULL);
 
 	xTaskCreate(xTaskMuestras, (char *) "xTaskMuestras",
